@@ -2,6 +2,7 @@ from abc import ABCMeta, abstractstaticmethod
 from typing import NamedTuple, Any, Optional, Tuple
 from serial import Serial
 from struct import calcsize, pack, unpack
+from time import sleep
 
 
 class MessageFormat(NamedTuple):
@@ -240,16 +241,26 @@ class Gimbal(Serial):
         assert result.cmd_id == 109
         return True
 
-    def control_angle(self, roll: float, pitch: float, yaw: float):
-        result = self.request(ControlReq(
-            2, 2, 2,
+    def control_angle(self, roll: float, pitch: float, yaw: float, auto=True):
+        mode = 2  # MODE_ANGLE
+        if auto:
+            mode |= 1 << 6
+        self.write_message(ControlReq(
+            mode, mode, mode,
             0, round(roll / 0.02197265625),
             0, round(pitch / 0.02197265625),
             0, round(yaw / 0.02197265625),
         ))
+        result = self.read_message()
         assert isinstance(result, Confirm)
         assert result.cmd_id == 67
-        return True
+        while auto and len(result.data) == 0:
+            result = self.read_message()
+            assert isinstance(result, Confirm)
+            assert result.cmd_id == 67
+            if result.data == b'\x01':
+                return True
+        return False
 
     def realtime_data(self, ver=3):
         self.write(Message.create(23 if ver == 3 else 25).pack())
@@ -260,10 +271,21 @@ if __name__ == '__main__':
     gimbal = Gimbal('/dev/ttyUSB0', baudrate=115200, timeout=10)
     bi = gimbal.board_info()
     c1 = gimbal.motors_on()
+    c3 = gimbal.control_angle(0, 0, 0)
     c3 = gimbal.control_angle(0, 30, 0)
+    print('+30')
+    sleep(2)
+    # c3 = gimbal.control_angle(0, 30, 30)
+    # print('yaw +30')
+    # sleep(2)
+    # c3 = gimbal.control_angle(0, 30, 0)
+    # print('yaw 0')
+    # sleep(2)
     rd = gimbal.realtime_data()
     c4 = gimbal.control_angle(0, -30, 0)
-    c2 = gimbal.motors_off()
+    print('-30')
+    sleep(2)
+    c2 = gimbal.motors_off(1)
     #connection = serial.Serial('/dev/ttyUSB0', baudrate=115200, timeout=10)
     connection.write(msg)
     message = read_message(connection, BoardInfo)
