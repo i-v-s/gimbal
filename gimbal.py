@@ -283,6 +283,8 @@ if __name__ == '__main__':
     # sleep(2)
     rd = gimbal.realtime_data()
     c4 = gimbal.control_angle(0, -30, 0)
+    c4 = gimbal.control_angle(0, -30, 30)
+    c4 = gimbal.control_angle(0, -30, 0)
     print('-30')
     sleep(2)
     c2 = gimbal.motors_off(1)

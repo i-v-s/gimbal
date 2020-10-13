@@ -1,16 +1,46 @@
-# This is a sample Python script.
+import cv2
+from gimbal import Gimbal
+from isource import ISource
+from time import sleep
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 
+def main():
+    src = ISource()
+    src.set_format(1920, 1080, 30, fmt='BGRx')
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+8 to toggle the breakpoint.
+    src.camera.set_tcam_property("Exposure Auto", False)
+    src.camera.set_tcam_property("Gain Auto", False)
+
+    src.camera.set_tcam_property("Exposure", 3000)
+    src.camera.set_tcam_property("Zoom", 0)
+    src.play()
+
+    gimbal = Gimbal('/dev/ttyUSB0', baudrate=115200, timeout=10)
+    gimbal.motors_on()
+
+    def go(r, p, y):
+        gimbal.control_angle(r, p, y)
+        image = None
+        while image is None:
+            sleep(0.6)
+            image = src.read()
+        cv2.imshow('Image', image)
+        cv2.waitKey()
+
+    go(0, 0, 0)
+    go(0, -30, 0)
+    go(0, -30, 30)
+    go(0, 30, 30)
+    go(0, 30, -30)
+    go(0, 0, -30)
+    go(0, 0, 0)
+    go(0, -15, 0)
+    go(0, -30, 0)
+    go(0, -45, 0)
+    go(0, -60, 0)
+    gimbal.motors_off()
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    main()
