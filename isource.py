@@ -68,12 +68,15 @@ class ISource:
         result = []
         source = Gst.ElementFactory.make("tcambin")
         serials = source.get_device_serials()
-        for serial in serials:
-            flag, model, identifier, connection_type = source.get_device_info(serial)
-            if flag:
-                result.append(DeviceInfo(model, serial, identifier, connection_type))
-                if print_list:
-                    print(f'Model: {model} Serial: {serial} Type: {connection_type}')
+        if serials:
+            for serial in serials:
+                flag, model, identifier, connection_type = source.get_device_info(serial)
+                if flag:
+                    result.append(DeviceInfo(model, serial, identifier, connection_type))
+                    if print_list:
+                        print(f'Model: {model} Serial: {serial} Type: {connection_type}')
+        else:
+            print('No cameras found!')
         return result
 
     def __init__(self, serial=None):
