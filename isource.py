@@ -1,4 +1,5 @@
-from typing import NamedTuple, List, Any
+from typing import NamedTuple, List, Any, Optional, Union
+from datetime import timedelta
 from threading import Lock
 from time import sleep
 import cv2
@@ -7,10 +8,12 @@ import sys
 import gi
 
 gi.require_version("Tcam", "0.1")
+gi.require_version("GLib", "2.0")
 gi.require_version("Gst", "1.0")
 gi.require_version("GstVideo", "1.0")
+gi.require_version("GstRtspServer", "1.0")
 
-from gi.repository import Tcam, Gst, GstVideo
+from gi.repository import Tcam, Gst, GstVideo, GstRtspServer, GLib, GObject
 
 
 class DeviceInfo(NamedTuple):
@@ -38,6 +41,89 @@ framecount = 0
 Gst.init(sys.argv)  # init gstreamer
 
 
+class GstBuilder:
+    def __init__(self, *pipeline: str):
+        self.pipeline = ' ! '.join(pipeline)
+        self.branches: List[GstBuilder] = []
+
+    def str(self, tee='t'):
+        if not self.branches:
+            return self.pipeline
+        if len(self.branches) == 1:
+            return f'{self.pipeline} ! {self.branches[0].str(tee)}'
+        return f'{self.pipeline} ! tee name={tee} ' + ' '.join(
+            f'{tee}. ! {b.str(f"{tee}_{i + 1}")}'
+            for i, b in enumerate(self.branches)
+        )
+
+    def __str__(self):
+        return self.str()
+
+    def branch(self, *pipeline: str) -> 'GstBuilder':
+        if not pipeline:
+            return self
+        b = GstBuilder(*pipeline)
+        self.branches.append(b)
+        return b
+
+    def __call__(self, *pipeline: str):
+        return self.branch(*pipeline)
+
+    def split_write(self, file_mask='out_%03d.mp4', max_size: timedelta = timedelta(minutes=1)):
+        return self.branch(
+            f'splitmuxsink location={file_mask} max-size-time={int(max_size.total_seconds() * 1e9)} muxer=mp4mux'
+        )
+
+    def encode(self, encoder='omxh265enc', **params):
+        encoder += ' ' + ' '.join(f'{k}={v}' for k, v in params.items())
+        return self.branch('videoconvert', encoder)
+
+    def parse(self, verbose=True):
+        string = str(self)
+        if verbose:
+            print('Launch string:', string)
+        return Gst.parse_launch(string)
+
+
+class Factory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self):
+        super(Factory, self).__init__()
+
+    def create_element(self, url):
+        print('Create element!!!', url)
+        raise RuntimeError('Test')
+
+
+def make_server(launch: str, port: int = 8554, url: str = '/test'):
+    # GObject.type_register(Factory)
+
+    # loop = GLib.MainLoop()
+    rtsp = GstRtspServer.RTSPServer()
+    rtsp.set_service(str(port))
+    #g_object_set(server, "service", port, NULL);
+    mp = rtsp.get_mount_points()
+    factory = GstRtspServer.RTSPMediaFactory()
+    factory.set_launch(launch)
+    # str(GstBuilder(
+    #     'tcambin name=source',
+    #     '\'video/x-raw,format=RGBx,width=1280,height=720,framerate=(fraction)60/1\''
+    #     #'capsfilter name=filter',
+    #     'videoconvert',
+    #     '\'video/x-raw,format=I420\'',
+    #     'videoconvert',
+    #     'x264enc qp-min=18 speed-preset=superfast ! h264parse ! rtph264pay  name=pay0 pt=96 config-interval=1'
+    # )))
+    factory.set_shared(True)
+    # mf = factory.g_type_instance
+    mp.add_factory(url, factory)
+    mp = None
+    rtsp.attach(None)
+    media = factory.construct(url)
+    media.set_reusable(True)
+    return media.pipeline
+    # loop.run()
+
+
 class NumProperty:
     def __init__(self, name, camera, info: PropertyInfo):
         self.name = name
@@ -63,7 +149,7 @@ class ISource:
     @staticmethod
     def list_devices(print_list=True) -> List[DeviceInfo]:
         """
-        Print information about all  available devices
+        Print information about all available devices
         """
         result = []
         source = Gst.ElementFactory.make("tcambin")
@@ -79,16 +165,22 @@ class ISource:
             print('No cameras found!')
         return result
 
-    def __init__(self, serial=None):
+    def __init__(self, serial=None, file_mask=None, encode=None, serve=None):
         self.zoom = 0
         self.serial = serial
         self.buffer = None
         self.lock = Lock()
         self.properties = {}
-        self.pipeline = Gst.parse_launch("tcambin name=source"
-                                         " ! capsfilter name=filter"
-                                         " ! videoconvert"
-                                         " ! appsink name=sink")
+        builder = GstBuilder('tcambin name=source', 'capsfilter name=filter')
+        if file_mask:
+            builder('queue').encode(**(encode or {})).split_write(file_mask)
+        builder('queue ! videoconvert' if file_mask else 'videoconvert', 'appsink name=sink')
+
+        if serve is None:
+            self.pipeline = builder.parse()
+        else:
+            make_server(str(builder), **serve)
+
         # test for error
         if not self.pipeline:
             raise RuntimeError("Could not create pipeline.")
@@ -318,7 +410,8 @@ class ISource:
 
 if __name__ == "__main__":
     devs = ISource.list_devices()
-    src = ISource()
+    src = ISource(#file_mask='out/video_%03d.mp4',
+                  encode={'encoder': 'x264enc', 'qp-min': 18, 'speed-preset': 'superfast'})
     src.print_formats()
     src.set_format(1920, 1080, 30, fmt='BGRx')
 
